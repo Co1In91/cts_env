@@ -1,0 +1,8 @@
+oss:
+  - endpoint: oss-cn-shanghai.aliyuncs.com
+    bucket: co1in
+    access_key_id: ~
+    access_key_secret: ~
+
+mirror:
+  - link: http://co1in.oss-cn-shanghai.aliyuncs.com/cts_packages.html
