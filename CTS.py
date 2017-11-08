@@ -9,6 +9,8 @@ from optparse import OptionParser
 import yaml
 from zipfile import ZipFile as zf
 from time import sleep
+from oss2 import SizedFileAdapter, determine_part_size
+from oss2.models import PartInfo
 
 
 pkg_type = {
@@ -145,8 +147,23 @@ class PackageManager:
                 # upload to oss
                 sleep(2)
                 print('pushing {0}'.format(pkg.file_name))
-                bucket.put_object_from_file(pkg.file_name, os.path.join(self.base_path, 'packages', pkg.file_name),
-                                            progress_callback=percentage)
+                total_size = os.path.getsize(pkg.file_name)
+                part_size = determine_part_size(total_size, preferred_size=100 * 1024)
+                upload_id = bucket.init_multipart_upload(pkg.file_name).upload_id
+                parts = []
+                with open(pkg.file_name, 'rb') as fileobj:
+                    part_number = 1
+                    offset = 0
+                    while offset < total_size:
+                        num_to_upload = min(part_size, total_size - offset)
+                        result = bucket.upload_part(pkg.file_name, upload_id, part_number,
+                                                    SizedFileAdapter(fileobj, num_to_upload))
+                        parts.append(PartInfo(part_number, result.etag))
+                        offset += num_to_upload
+                        part_number += 1
+                bucket.complete_multipart_upload(pkg.file_name, upload_id, parts)
+                with open(pkg.file_name, 'rb') as fileobj:
+                    assert bucket.get_object(pkg.file_name).read() == fileobj.read()
                 bucket.put_object_acl(pkg.file_name, oss2.OBJECT_ACL_PUBLIC_READ)
                 os.remove(os.path.join(self.base_path, 'packages', pkg.file_name))
 
@@ -214,8 +231,8 @@ class PackageManager:
                     pass
                 else:
                     print('downloading {0}'.format(pkg.file_name))
-                    bucket.get_object_to_file(pkg.file_name, local_dst, progress_callback=percentage)
-                    zf(local_dst, 'r').extractall(os.path.join(self.base_path, 'packages', pkg.pure_name))
+                    bucket.get_object_to_file(pkg.file_name, pkg.file_name, progress_callback=percentage)
+                    zf(local_dst, 'rb').extract()
                     os.remove(local_dst)
         if not count:
             print('packages not found')
@@ -245,19 +262,17 @@ if __name__ == '__main__':
                       default=False,
                       help="list all mirror packages")
 
-    parser.add_option("-a", "--android", action="store",
-                      dest="download_android",
-                      default=0,
-                      help="download a package, -d <ANDROID_VERSION> ")
-
-    parser.add_option("-m", "--media", action="store",
-                      dest="download_media",
-                      default=0,
-                      help="download a package, -m <MEDIA_VERSION> ")
-
     parser.add_option("-x", "--proxy", action="store",
                       dest="proxy",
                       help="push package in proxy")
+
+    parser.add_option("-d", "--download", action="store_true",
+                      dest="download",
+                      help="download ")
+
+    parser.add_option("-a", "--android", action="store",
+                      dest="download_android",
+                      help="download ")
 
     (options, args) = parser.parse_args()
 
@@ -276,11 +291,12 @@ if __name__ == '__main__':
     elif options.fetch_mirror:
         pm.fetch_package_list(remote=pm.mirror)
 
-    elif options.download_android:
-        pm.download(options.download_android)
+    elif options.download:
+        if options.download_android:
+            pm.download(options.download_android)
 
-    elif options.download_media:
-        pm.download_media(options.download_media)
+        elif options.download_media:
+            pm.download_media(options.download_media)
 
     else:
         parser.print_help()
