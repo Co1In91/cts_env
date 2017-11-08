@@ -7,6 +7,8 @@ import sys
 from urllib.parse import urlsplit
 from optparse import OptionParser
 import yaml
+from zipfile import ZipFile as zf
+from time import sleep
 
 
 pkg_type = {
@@ -70,10 +72,13 @@ class PackageManager:
     bucket = ''
     endpoint = ''
     mirror = ''
+    proxy = {}
 
     def __init__(self):
         self.read_config()
         self.domain = urlsplit(self.origin).netloc
+        if not os.path.exists(os.path.join(self.base_path, 'packages')):
+            os.mkdir(os.path.join(self.base_path, 'packages'))
 
     def read_config(self):
         if os.path.exists(os.path.join(self.base_path, 'cts.yaml')):
@@ -88,10 +93,12 @@ class PackageManager:
             print('missing config.yaml, downloading')
 
     def fetch_package_list(self, remote=None):
+        proxy_url = {}
         if not remote:
             remote = self.origin
+            proxy_url = self.proxy
         print('fetching {0}\n'.format(remote))
-        content = requests.get(remote).content
+        content = requests.get(remote, proxies=proxy_url).content
         soup = bs4.BeautifulSoup(content, 'html.parser')
         a_tags = soup.find_all(href=re.compile('dl.google.com'))
         pkg_urls = list(map(lambda x: x.get('href'), a_tags))
@@ -136,9 +143,11 @@ class PackageManager:
                             f.write(chunk)
 
                 # upload to oss
+                sleep(2)
                 print('pushing {0}'.format(pkg.file_name))
-                with open(os.path.join(pkg_dir, pkg.file_name), 'rb') as fs:
-                    bucket.put_object(pkg.file_name, fs, progress_callback=percentage)
+                bucket.put_object_from_file(pkg.file_name, os.path.join(self.base_path, 'packages', pkg.file_name),
+                                            progress_callback=percentage)
+                bucket.put_object_acl(pkg.file_name, oss2.OBJECT_ACL_PUBLIC_READ)
 
             else:
                 print('remote: {0} is exist'.format(pkg))
@@ -151,15 +160,15 @@ class PackageManager:
 
         print('\n\nCloning packages to local: {0}'.format(pkg_dir))
         for pkg in pkg_list:
-            if os.path.exists(os.path.join(pkg_dir, pkg.file_name)):
-                print('local: {0} is exist'.format(pkg))
-            else:
+            if not os.path.exists(os.path.join(pkg_dir, pkg.file_name)):
                 if not bucket.object_exists(pkg.file_name):
                     print('remote: {0} is not exist'.format(pkg))
                 else:
                     print('downloading {0}'.format(pkg.file_name))
                     local_dst = os.path.join(pkg_dir, pkg.file_name)
                     bucket.get_object_to_file(pkg.file_name, local_dst, progress_callback=percentage)
+                    print('local: {0} is exist'.format(pkg))
+                    zf(local_dst, 'r').extractall(os.path.join(pkg_dir, pkg.file_name))
 
     def download(self, android_version, platform='linux_x86-arm'):
         oss_auth = oss2.Auth(self.access_key_id, self.access_key_secret)
@@ -170,15 +179,43 @@ class PackageManager:
         for pkg in pkg_list:
             if str(pkg.android_version) == str(android_version) and platform in pkg.platform:
                 count += 1
+                local_dst = os.path.join(pkg_dir, pkg.file_name)
                 if pkg.file_name in os.listdir(os.path.join(self.base_path, 'packages')):
-                    pass
+                    print('local: {0} is exist'.format(pkg))
+                    zf(local_dst, 'r').extractall(os.path.join(self.base_path, 'packages', pkg.pure_name))
+                    os.remove(local_dst)
                 elif pkg.pure_name in os.listdir(os.path.join(self.base_path, 'packages')):
                     pass
                 else:
                     print('downloading {0}'.format(pkg.file_name))
-                    local_dst = os.path.join(pkg_dir, pkg.file_name)
                     bucket.get_object_to_file(pkg.file_name, local_dst, progress_callback=percentage)
+                    zf(local_dst, 'r').extractall(os.path.join(self.base_path, 'packages', pkg.pure_name))
+                    os.remove(local_dst)
 
+        if not count:
+            print('packages not found')
+
+    def download_media(self, media_version):
+        oss_auth = oss2.Auth(self.access_key_id, self.access_key_secret)
+        bucket = oss2.Bucket(oss_auth, self.endpoint, self.bucket)
+        pkg_list = self.fetch_package_list(remote=self.mirror)
+        pkg_dir = os.path.join(self.base_path, 'packages')
+        count = 0
+        for pkg in pkg_list:
+            if str(pkg.release) == str(media_version) and pkg.pkg_type == 'android-cts-media':
+                count += 1
+                local_dst = os.path.join(pkg_dir, pkg.file_name)
+                if pkg.file_name in os.listdir(os.path.join(self.base_path, 'packages')):
+                    print('local: {0} is exist'.format(pkg))
+                    zf(local_dst, 'r').extractall(os.path.join(self.base_path, 'packages', pkg.pure_name))
+                    os.remove(local_dst)
+                elif pkg.pure_name in os.listdir(os.path.join(self.base_path, 'packages')):
+                    pass
+                else:
+                    print('downloading {0}'.format(pkg.file_name))
+                    bucket.get_object_to_file(pkg.file_name, local_dst, progress_callback=percentage)
+                    zf(local_dst, 'r').extractall(os.path.join(self.base_path, 'packages', pkg.pure_name))
+                    os.remove(local_dst)
         if not count:
             print('packages not found')
 
@@ -207,15 +244,27 @@ if __name__ == '__main__':
                       default=False,
                       help="list all mirror packages")
 
-    parser.add_option("-d", "--download", action="store",
-                      dest="download",
+    parser.add_option("-a", "--android", action="store",
+                      dest="download_android",
                       default=0,
                       help="download a package, -d <ANDROID_VERSION> ")
 
+    parser.add_option("-m", "--media", action="store",
+                      dest="download_media",
+                      default=0,
+                      help="download a package, -m <MEDIA_VERSION> ")
+
+    parser.add_option("-x", "--proxy", action="store",
+                      dest="proxy",
+                      help="push package in proxy")
+
     (options, args) = parser.parse_args()
 
+    if options.proxy:
+        pm.proxy = {'https': options.proxy}
+
     if options.push_to_oss:
-        pm.sync_to_oss()
+        pm.push_to_oss()
 
     elif options.clone:
         pm.clone()
@@ -226,8 +275,11 @@ if __name__ == '__main__':
     elif options.fetch_mirror:
         pm.fetch_package_list(remote=pm.mirror)
 
-    elif options.download:
-        pm.download(options.download)
+    elif options.download_android:
+        pm.download(options.download_android)
+
+    elif options.download_media:
+        pm.download_media(options.download_media)
 
     else:
         parser.print_help()
