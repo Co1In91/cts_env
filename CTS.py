@@ -148,6 +148,7 @@ class PackageManager:
                 bucket.put_object_from_file(pkg.file_name, os.path.join(self.base_path, 'packages', pkg.file_name),
                                             progress_callback=percentage)
                 bucket.put_object_acl(pkg.file_name, oss2.OBJECT_ACL_PUBLIC_READ)
+                os.remove(os.path.join(self.base_path, 'packages', pkg.file_name))
 
             else:
                 print('remote: {0} is exist'.format(pkg))
