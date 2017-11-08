@@ -120,7 +120,7 @@ class PackageManager:
         print('\n')
         return pkg_list
 
-    def push_to_oss(self):
+    def push_to_oss(self, package_name=None):
         pkg_list = self.fetch_package_list()
         pkg_dir = os.path.join(self.base_path, 'packages')
         if not os.path.exists(pkg_dir):
@@ -130,46 +130,55 @@ class PackageManager:
         oss_auth = oss2.Auth(self.access_key_id, self.access_key_secret)
         bucket = oss2.Bucket(oss_auth, self.endpoint, self.bucket)
         for pkg in pkg_list:
-            if not bucket.object_exists(pkg.file_name):
-                print('remote: {0} is not exist'.format(pkg))
-                # check local package
-                if os.path.exists(os.path.join(pkg_dir, pkg.file_name)):
-                    print('local: {0} is exist'.format(pkg))
-                else:
-                    print('local: {0} is not exist'.format(pkg))
+            if package_name:
+                if package_name == pkg.file_name:
                     print('downloading {0}'.format(pkg.file_name))
                     r = requests.get(pkg.url, stream=True)
                     f = open(os.path.join(pkg_dir, pkg.file_name), 'wb')
                     for chunk in r.iter_content(chunk_size=512):
                         if chunk:
                             f.write(chunk)
+                    f.close()
+                    print('downloaded {0}'.format(pkg.file_name))
 
-                # upload to oss
-                sleep(2)
-                print('pushing {0}'.format(pkg.file_name))
-                local_file_path = os.path.join(self.base_path, 'packages', pkg.file_name)
-                total_size = os.path.getsize(local_file_path)
-                part_size = determine_part_size(total_size, preferred_size=100 * 1024)
-                upload_id = bucket.init_multipart_upload(local_file_path).upload_id
-                parts = []
-                with open(local_file_path, 'rb') as fileobj:
-                    part_number = 1
-                    offset = 0
-                    while offset < total_size:
-                        num_to_upload = min(part_size, total_size - offset)
-                        result = bucket.upload_part(local_file_path, upload_id, part_number,
-                                                    SizedFileAdapter(fileobj, num_to_upload))
-                        parts.append(PartInfo(part_number, result.etag))
-                        offset += num_to_upload
-                        part_number += 1
-                bucket.complete_multipart_upload(local_file_path, upload_id, parts)
-                with open(pkg.file_name, 'rb') as fileobj:
-                    assert bucket.get_object(local_file_path).read() == fileobj.read()
-                bucket.put_object_acl(pkg.file_name, oss2.OBJECT_ACL_PUBLIC_READ)
-                os.remove(os.path.join(self.base_path, 'packages', pkg.file_name))
-
+                    # upload to oss
+                    sleep(10)
+                    print('pushing {0}'.format(pkg.file_name))
+                    with open(os.path.join(self.base_path, 'packages', pkg.file_name), 'rb') as fileobj:
+                        bucket.put_object(pkg.file_name, fileobj)
+                    bucket.put_object_acl(pkg.file_name, oss2.OBJECT_ACL_PUBLIC_READ)
+                    sys.exit(0)
+                continue
             else:
-                print('remote: {0} is exist'.format(pkg))
+                if not bucket.object_exists(pkg.file_name):
+                    print('remote: {0} is not exist'.format(pkg))
+                    # check local package
+                    if os.path.exists(os.path.join(pkg_dir, pkg.file_name)):
+                        print('local: {0} is exist'.format(pkg))
+                    elif pkg.platform == 'linux_x86-x86':
+                        pass
+                    else:
+                        print('local: {0} is not exist'.format(pkg))
+                        print('downloading {0}'.format(pkg.file_name))
+                        r = requests.get(pkg.url, stream=True)
+                        f = open(os.path.join(pkg_dir, pkg.file_name), 'wb')
+                        for chunk in r.iter_content(chunk_size=512):
+                            if chunk:
+                                f.write(chunk)
+
+                        # upload to oss
+                        sleep(2)
+                        print('pushing {0}'.format(pkg.file_name))
+                        oss2.resumable_upload(bucket, pkg.file_name, os.path.join(self.base_path, 'packages', pkg.file_name),
+                                              store=oss2.ResumableStore(root='/tmp'),
+                                              multipart_threshold=100 * 1024,
+                                              part_size=100 * 1024,
+                                              num_threads=4,
+                                              progress_callback=percentage)
+                        bucket.put_object_acl(pkg.file_name, oss2.OBJECT_ACL_PUBLIC_READ)
+                        os.remove(os.path.join(self.base_path, 'packages', pkg.file_name))
+                else:
+                    print('remote: {0} is exist'.format(pkg))
 
     def clone(self):
         oss_auth = oss2.Auth(self.access_key_id, self.access_key_secret)
@@ -275,13 +284,20 @@ if __name__ == '__main__':
                       dest="download_android",
                       help="download ")
 
+    parser.add_option("-f", "--file", action="store",
+                      dest="file_name",
+                      help="file_name ")
+
     (options, args) = parser.parse_args()
 
     if options.proxy:
         pm.proxy = {'https': options.proxy}
 
     if options.push_to_oss:
-        pm.push_to_oss()
+        if options.file_name:
+            pm.push_to_oss(package_name=options.file_name)
+        else:
+            pm.push_to_oss()
 
     elif options.clone:
         pm.clone()
