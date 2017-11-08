@@ -165,6 +165,7 @@ class PackageManager:
                         for chunk in r.iter_content(chunk_size=512):
                             if chunk:
                                 f.write(chunk)
+                        f.close()
 
                         # upload to oss
                         sleep(2)
