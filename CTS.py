@@ -9,8 +9,6 @@ from optparse import OptionParser
 import yaml
 from zipfile import ZipFile as zf
 from time import sleep
-from oss2 import SizedFileAdapter, determine_part_size
-from oss2.models import PartInfo
 
 
 pkg_type = {
@@ -155,6 +153,16 @@ class PackageManager:
                     # check local package
                     if os.path.exists(os.path.join(pkg_dir, pkg.file_name)):
                         print('local: {0} is exist'.format(pkg))
+                        print('pushing {0}'.format(pkg.file_name))
+                        oss2.resumable_upload(bucket, pkg.file_name,
+                                              os.path.join(self.base_path, 'packages', pkg.file_name),
+                                              store=oss2.ResumableStore(root='/tmp'),
+                                              multipart_threshold=100 * 1024,
+                                              part_size=100 * 1024,
+                                              num_threads=4,
+                                              progress_callback=percentage)
+                        bucket.put_object_acl(pkg.file_name, oss2.OBJECT_ACL_PUBLIC_READ)
+                        os.remove(os.path.join(self.base_path, 'packages', pkg.file_name))
                     elif pkg.platform == 'linux_x86-x86':
                         pass
                     else:
@@ -218,7 +226,7 @@ class PackageManager:
                 else:
                     print('downloading {0}'.format(pkg.file_name))
                     bucket.get_object_to_file(pkg.file_name, local_dst, progress_callback=percentage)
-                    zf(local_dst, 'r').extractall(os.path.join(self.base_path, 'packages', pkg.pure_name))
+                    zf(local_dst, 'r').extractall(os.path.join(pkg_dir, pkg.pure_name))
                     os.remove(local_dst)
 
         if not count:
@@ -243,7 +251,7 @@ class PackageManager:
                 else:
                     print('downloading {0}'.format(pkg.file_name))
                     bucket.get_object_to_file(pkg.file_name, pkg.file_name, progress_callback=percentage)
-                    zf(local_dst, 'rb').extract()
+                    zf(local_dst, 'rb').extractall(os.path.join(pkg_dir, pkg.pure_name))
                     os.remove(local_dst)
         if not count:
             print('packages not found')
