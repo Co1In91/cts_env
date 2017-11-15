@@ -7,8 +7,9 @@ import sys
 from urllib.parse import urlsplit
 from optparse import OptionParser
 import yaml
-from zipfile import ZipFile as zf
+from zipfile import ZipFile
 from time import sleep
+import subprocess
 
 
 pkg_type = {
@@ -79,6 +80,7 @@ class PackageManager:
         self.domain = urlsplit(self.origin).netloc
         if not os.path.exists(os.path.join(self.base_path, 'packages')):
             os.mkdir(os.path.join(self.base_path, 'packages'))
+        self.set_up_env()
 
     def read_config(self):
         if os.path.exists(os.path.join(self.base_path, 'cts.yaml')):
@@ -178,7 +180,8 @@ class PackageManager:
                         # upload to oss
                         sleep(2)
                         print('pushing {0}'.format(pkg.file_name))
-                        oss2.resumable_upload(bucket, pkg.file_name, os.path.join(self.base_path, 'packages', pkg.file_name),
+                        package_dst = os.path.join(self.base_path, 'packages', pkg.file_name)
+                        oss2.resumable_upload(bucket, pkg.file_name, package_dst,
                                               store=oss2.ResumableStore(root='/tmp'),
                                               multipart_threshold=100 * 1024,
                                               part_size=100 * 1024,
@@ -205,7 +208,7 @@ class PackageManager:
                     local_dst = os.path.join(pkg_dir, pkg.file_name)
                     bucket.get_object_to_file(pkg.file_name, local_dst, progress_callback=percentage)
                     print('local: {0} is exist'.format(pkg))
-                    zf(local_dst, 'r').extractall(os.path.join(pkg_dir, pkg.file_name))
+                    ZipFile(local_dst, 'r').extractall(os.path.join(pkg_dir, pkg.file_name))
 
     def download(self, android_version, platform='linux_x86-arm'):
         oss_auth = oss2.Auth(self.access_key_id, self.access_key_secret)
@@ -219,14 +222,14 @@ class PackageManager:
                 local_dst = os.path.join(pkg_dir, pkg.file_name)
                 if pkg.file_name in os.listdir(os.path.join(self.base_path, 'packages')):
                     print('local: {0} is exist'.format(pkg))
-                    zf(local_dst, 'r').extractall(os.path.join(self.base_path, 'packages', pkg.pure_name))
+                    ZipFile(local_dst, 'r').extractall(os.path.join(self.base_path, 'packages', pkg.pure_name))
                     os.remove(local_dst)
                 elif pkg.pure_name in os.listdir(os.path.join(self.base_path, 'packages')):
                     pass
                 else:
                     print('downloading {0}'.format(pkg.file_name))
                     bucket.get_object_to_file(pkg.file_name, local_dst, progress_callback=percentage)
-                    zf(local_dst, 'r').extractall(os.path.join(pkg_dir, pkg.pure_name))
+                    ZipFile(local_dst, 'r').extractall(os.path.join(pkg_dir, pkg.pure_name))
                     os.remove(local_dst)
 
         if not count:
@@ -244,17 +247,34 @@ class PackageManager:
                 local_dst = os.path.join(pkg_dir, pkg.file_name)
                 if pkg.file_name in os.listdir(os.path.join(self.base_path, 'packages')):
                     print('local: {0} is exist'.format(pkg))
-                    zf(local_dst, 'r').extractall(os.path.join(self.base_path, 'packages', pkg.pure_name))
+                    ZipFile(local_dst, 'r').extractall(os.path.join(self.base_path, 'packages', pkg.pure_name))
                     os.remove(local_dst)
                 elif pkg.pure_name in os.listdir(os.path.join(self.base_path, 'packages')):
                     pass
                 else:
                     print('downloading {0}'.format(pkg.file_name))
                     bucket.get_object_to_file(pkg.file_name, pkg.file_name, progress_callback=percentage)
-                    zf(local_dst, 'rb').extractall(os.path.join(pkg_dir, pkg.pure_name))
+                    ZipFile(local_dst, 'rb').extractall(os.path.join(pkg_dir, pkg.pure_name))
                     os.remove(local_dst)
         if not count:
             print('packages not found')
+
+    def set_up_env(self):
+        try:
+            subprocess.check_output(['adb', '-version'], stderr=subprocess.PIPE)
+        except FileNotFoundError:
+            print('ADB is not configured')
+            print('Downloading platform-tools')
+            oss_auth = oss2.Auth(self.access_key_id, self.access_key_secret)
+            bucket = oss2.Bucket(oss_auth, self.endpoint, self.bucket)
+            local_dst = os.path.join(self.base_path, 'platform-tools-latest-linux.zip')
+            if not os.path.exists(local_dst):
+                bucket.get_object_to_file('platform-tools-latest-linux.zip', 'platform-tools-latest-linux.zip')
+            ZipFile(local_dst).extractall()
+            os.remove(local_dst)
+
+        finally:
+            pass
 
 
 if __name__ == '__main__':
@@ -297,6 +317,10 @@ if __name__ == '__main__':
                       dest="file_name",
                       help="file_name ")
 
+    parser.add_option("-t", "--test", action="store_true",
+                      dest="test",
+                      help="for development")
+
     (options, args) = parser.parse_args()
 
     if options.proxy:
@@ -324,6 +348,8 @@ if __name__ == '__main__':
         elif options.download_media:
             pm.download_media(options.download_media)
 
+    elif options.test:
+        pass
+
     else:
         parser.print_help()
-
