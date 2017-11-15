@@ -260,8 +260,9 @@ class PackageManager:
             print('packages not found')
 
     def set_up_env(self):
+        # Check ADB environment
         try:
-            subprocess.check_output(['adb', '-version'], stderr=subprocess.PIPE)
+            subprocess.check_output(['adb', 'version'])
         except FileNotFoundError:
             print('ADB is not configured')
             print('Downloading platform-tools')
@@ -272,9 +273,20 @@ class PackageManager:
                 bucket.get_object_to_file('platform-tools-latest-linux.zip', 'platform-tools-latest-linux.zip')
             ZipFile(local_dst).extractall()
             os.remove(local_dst)
+            shell_name = os.path.split(os.environ['SHELL'])[1]
+            with open(os.path.join(os.path.expanduser('~'), '.{0}rc'.format(shell_name)), 'a+') as fs:
+                fs.write('export PATH={0}:$PATH'.format(os.path.join(self.base_path, 'platform-tools')))
+            fs.close()
+            subprocess.Popen('source ~/.{0}rc'.format(shell_name), shell=True, stderr=subprocess.PIPE)
 
-        finally:
-            pass
+        # Check Java environment
+        try:
+            subprocess.check_output(['java', '-version'])
+        except FileNotFoundError:
+            print('Java is not installed')
+            print('Installing platform-tools')
+            cmd = 'sudo apt-get install -y openjdk-8-jdk'.split()
+            subprocess.Popen(cmd)
 
 
 if __name__ == '__main__':

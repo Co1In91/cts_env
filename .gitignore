@@ -3,3 +3,4 @@ cts.yaml
 .idea/
 .DS_Store
 packages
+platform-tools/
