@@ -253,7 +253,7 @@ class PackageManager:
                     pass
                 else:
                     print('downloading {0}'.format(pkg.file_name))
-                    bucket.get_object_to_file(pkg.file_name, pkg.file_name, progress_callback=percentage)
+                    bucket.get_object_to_file(pkg.file_name, local_dst, progress_callback=percentage)
                     ZipFile(local_dst, 'rb').extractall(os.path.join(pkg_dir, pkg.pure_name))
                     os.remove(local_dst)
         if not count:
@@ -323,7 +323,11 @@ if __name__ == '__main__':
 
     parser.add_option("-a", "--android", action="store",
                       dest="download_android",
-                      help="download ")
+                      help="download by android version")
+
+    parser.add_option("-m", "--media", action="store",
+                      dest="download_media",
+                      help="download by media version")
 
     parser.add_option("-f", "--file", action="store",
                       dest="file_name",
